@@ -1,7 +1,8 @@
-CC      = gcc
-CFLAGS  = -Wall -Wextra -O2
-LIBS    = -lhiredis
-TARGET  = perfparse
+CC        = gcc
+HIREDIS   = /usr/local/src/antirez-hiredis-d5d8843
+CFLAGS    = -Wall -Wextra -O2 -I$(HIREDIS)
+LIBS      = $(HIREDIS)/libhiredis.a
+TARGET    = perfparse
 
 all: $(TARGET)
 

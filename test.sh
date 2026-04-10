@@ -12,8 +12,8 @@ FAIL=0
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 die()  { echo "FATAL: $*" >&2; exit 1; }
-pass() { echo "  PASS: $*"; ((PASS++)); }
-fail() { echo "  FAIL: $*"; ((FAIL++)); }
+pass() { echo "  PASS: $*"; PASS=$((PASS + 1)); }
+fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 
 assert_eq() {
     local desc="$1" got="$2" want="$3"
@@ -24,20 +24,35 @@ assert_eq() {
     fi
 }
 
-redis_cli() { command redis-cli -p "$PORT" "$@"; }
+# Locate redis-server and redis-cli — check PATH first, then known source dirs
+find_redis() {
+    local name="$1"
+    if command -v "$name" >/dev/null 2>&1; then
+        command -v "$name"
+        return
+    fi
+    # Search known source directories; ignore errors (missing dirs, permissions)
+    local found
+    found=$(find /usr/local/src /opt /usr /usr/local 2>/dev/null \
+        -name "$name" -type f 2>/dev/null | head -1 || true)
+    echo "$found"
+}
 
-# ── setup / teardown ─────────────────────────────────────────────────────────
+REDIS_SERVER=$(find_redis redis-server)
+REDIS_CLI=$(find_redis redis-cli)
 
-command -v redis-server >/dev/null || die "redis-server not found"
-command -v redis-cli    >/dev/null || die "redis-cli not found"
+[ -n "$REDIS_SERVER" ] || die "redis-server not found"
+[ -n "$REDIS_CLI"    ] || die "redis-cli not found"
+
+redis_cli() { "$REDIS_CLI" -p "$PORT" "$@"; }
 [ -x "$BINARY" ] || die "$BINARY not found — run 'make' first"
 
-# Start a throw-away Redis instance
-redis-server --port "$PORT" --daemonize yes --logfile /tmp/perfparse-test-redis.log \
-    --save "" >/dev/null
-trap 'redis-cli shutdown nosave 2>/dev/null || true; exit' EXIT INT TERM
+# Start a throw-away Redis instance (pipe config via stdin for Redis 2.x compat)
+printf 'port %s\ndaemonize yes\nlogfile /tmp/perfparse-test-redis.log\n' \
+    "$PORT" | "$REDIS_SERVER" - >/dev/null
+trap 'redis_cli shutdown 2>/dev/null || true' EXIT INT TERM
 
-sleep 0.3  # give redis-server a moment to start
+sleep 0.5  # give redis-server a moment to start
 
 # ── test 1: happy path ────────────────────────────────────────────────────────
 
