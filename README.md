@@ -10,6 +10,11 @@ Each line must contain exactly three `|`-separated fields:
 <key>|<timestamp>|<value>
 ```
 
+Fields are validated before storage:
+- `key` — only characters `[A-Za-z0-9_.-]` are accepted; invalid keys are skipped with a WARN log
+- `timestamp` — must be a non-negative integer; invalid timestamps are skipped with a WARN log
+- `value` — stored as-is (string, up to 511 bytes)
+
 Example:
 
 ```
@@ -50,7 +55,7 @@ make
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `host` | `172.20.1.23` | Redis host |
-| `port` | `6379` | Redis port |
+| `port` | `6379` | Redis port (must be 1–65535) |
 | `-v` | off | Enable DEBUG logging |
 
 Feed records via stdin:
