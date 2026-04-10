@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <ctype.h>
 #include "hiredis.h"
 
 /* FIX: resp array was size 3, risking overflow if input has more than 3 tokens.
@@ -88,10 +89,17 @@ int main(int argc, char **argv)
         if (strcmp(argv[i], "-v") == 0) {
             log_level = LOG_DEBUG;
         } else if (positional == 0) {
-            host = argv[i];
+            host = strdup(argv[i]);
+            if (!host) { perror("strdup"); exit(1); }
             positional++;
         } else if (positional == 1) {
-            port = atoi(argv[i]);
+            char *endptr;
+            long p = strtol(argv[i], &endptr, 10);
+            if (*endptr != '\0' || p < 1 || p > 65535) {
+                fprintf(stderr, "Invalid port: %s\n", argv[i]);
+                exit(1);
+            }
+            port = (int)p;
             positional++;
         }
     }
@@ -104,23 +112,49 @@ int main(int argc, char **argv)
     char *delim = "|";
     const char *t = ".time";
 
+    /* Returns 1 if every character in s is in [A-Za-z0-9_.-], 0 otherwise. */
+    #define VALID_KEY_CHAR(ch) (isalnum((unsigned char)(ch)) || \
+                                (ch) == '_' || (ch) == '.' || (ch) == '-')
+
     do {
-        /* FIX: added field width limit %511s to prevent buffer overflow on input[512]. */
-        if (scanf("%511s", input) == EOF) break;
+        /* FIX(4): use fgets so values containing spaces are read correctly. */
+        if (fgets(input, sizeof(input), stdin) == NULL) break;
+        /* Strip trailing newline */
+        input[strcspn(input, "\n")] = '\0';
+        if (input[0] == '\0') continue;
         LOG(LOG_DEBUG, "Input: %s", input);
 
         i = 0;
         resp[i] = strtok(input, delim);
-        /* FIX: added bounds check (i < MAX_TOKENS - 1) to prevent resp[] overflow. */
         while (resp[i] != NULL && i < MAX_TOKENS - 1) {
             LOG(LOG_DEBUG, "Token[%d]: %s", i, resp[i]);
             resp[++i] = strtok(NULL, delim);
         }
 
-        /* FIX: validate that we have at least 3 tokens before using resp[0..2]. */
         if (i < 3 || resp[0] == NULL || resp[1] == NULL || resp[2] == NULL) {
             LOG(LOG_WARN, "Invalid input (got %d tokens, expected key|timestamp|value): %s", i, input);
             continue;
+        }
+
+        /* FIX(1): reject key names that contain characters outside [A-Za-z0-9_.-]
+           to prevent Redis key injection from untrusted stdin. */
+        int key_ok = 1;
+        for (const char *p = resp[0]; *p; p++) {
+            if (!VALID_KEY_CHAR(*p)) { key_ok = 0; break; }
+        }
+        if (!key_ok || resp[0][0] == '\0') {
+            LOG(LOG_WARN, "Rejected invalid key: %s", resp[0]);
+            continue;
+        }
+
+        /* FIX(2): validate timestamp is a non-negative integer string. */
+        {
+            char *endptr;
+            long long ts = strtoll(resp[1], &endptr, 10);
+            if (*endptr != '\0' || ts < 0) {
+                LOG(LOG_WARN, "Rejected invalid timestamp: %s", resp[1]);
+                continue;
+            }
         }
 
         /* Push value and trim list to last 1000 entries */
